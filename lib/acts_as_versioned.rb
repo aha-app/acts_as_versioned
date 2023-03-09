@@ -284,11 +284,19 @@ module ActiveRecord #:nodoc:
         # Clears old revisions if a limit is set with the :limit option in <tt>acts_as_versioned</tt>.
         # Override this method to set your own criteria for clearing old versions.
         def clear_old_versions
-          return if self.class.max_version_limit == 0
+          Rails.logger.info("acts_as_versioned clear_old_versions begin #{self.class.max_version_limit}")
+          if self.class.max_version_limit == 0
+            Rails.logger.info("acts_as_versioned clear_old_versions end")
+            return
+          end
+          Rails.logger.info("acts_as_versioned clear_old_versions continuing #{self.class.max_version_limit}")
+
           excess_baggage = send(self.class.version_column).to_i - self.class.max_version_limit
+          Rails.logger.info("acts_as_versioned clear_old_versions removing #{excess_baggage}")
           if excess_baggage > 0
             self.class.versioned_class.delete_all ["#{self.class.version_column} <= ? and #{self.class.versioned_foreign_key} = ?", excess_baggage, id]
           end
+          Rails.logger.info("acts_as_versioned clear_old_versions end")
         end
 
         # Reverts a model to a given version.  Takes either a version number or an instance of the versioned model
