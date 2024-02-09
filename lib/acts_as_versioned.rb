@@ -281,6 +281,20 @@ module ActiveRecord #:nodoc:
           end
         end
 
+        # Force save a version even if the conditions are not met.
+        def save_version!
+          # Allocate a new version number
+          self.send("#{self.class.version_column}=", next_version)
+          self.save!
+
+          # Save a new version
+          rev = self.class.versioned_class.new
+          clone_versioned_model(self, rev)
+          rev.send("#{self.class.version_column}=", send(self.class.version_column))
+          rev.send("#{self.class.versioned_foreign_key}=", id)
+          rev.save!
+        end
+
         # Clears old revisions if a limit is set with the :limit option in <tt>acts_as_versioned</tt>.
         # Override this method to set your own criteria for clearing old versions.
         def clear_old_versions
