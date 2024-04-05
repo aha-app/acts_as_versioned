@@ -285,7 +285,11 @@ module ActiveRecord #:nodoc:
         def save_version!
           # Allocate a new version number
           self.send("#{self.class.version_column}=", next_version)
-          self.save!
+
+          # The record might have callbacks or other mechanisms that will cause
+          # changes such that a new version would be created upon saving, avoid
+          # that here since we're explicitly creating a new version below
+          self.save_without_revision!
 
           # Save a new version
           rev = self.class.versioned_class.new
