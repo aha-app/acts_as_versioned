@@ -361,9 +361,16 @@ module ActiveRecord #:nodoc:
             next unless orig_model.has_attribute?(col.name)
             define_method(new_model, col.name.to_sym)
 
-            # We're using read_attribute_before_type_cast to get the value here
-            # to ensure we get the actual value for enum fields
-            new_model.send("#{col.name.to_sym}=", orig_model.read_attribute_before_type_cast(col.name))
+            # If the field is an enum, use read_attribute_before_type_cast to
+            # get the value that would be in the database, not the friendly 
+            # name (i.e. 50 vs "narrow")
+            value = if orig_model.defined_enums.include? col.name
+              orig_model.read_attribute_before_type_cast(col.name)
+            else
+              orig_model.send(col.name)
+            end
+
+            new_model.send("#{col.name.to_sym}=", value)
           end
 
           if orig_model.is_a?(self.class.versioned_class)
