@@ -360,7 +360,10 @@ module ActiveRecord #:nodoc:
           self.class.versioned_columns.each do |col|
             next unless orig_model.has_attribute?(col.name)
             define_method(new_model, col.name.to_sym)
-            new_model.send("#{col.name.to_sym}=", orig_model.send(col.name))
+
+            # We're using read_attribute_before_type_cast to get the value here
+            # to ensure we get the actual value for enum fields
+            new_model.send("#{col.name.to_sym}=", orig_model.read_attribute_before_type_cast(col.name))
           end
 
           if orig_model.is_a?(self.class.versioned_class)
