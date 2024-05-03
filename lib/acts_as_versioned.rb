@@ -364,7 +364,7 @@ module ActiveRecord #:nodoc:
             # If the field is an enum, use read_attribute_before_type_cast to
             # get the value that would be in the database, not the friendly 
             # name (i.e. 50 vs "narrow")
-            value = if orig_model.defined_enums.include? col.name
+            value = if orig_model.defined_enums&.include? col.name
               orig_model.read_attribute_before_type_cast(col.name)
             else
               orig_model.send(col.name)
