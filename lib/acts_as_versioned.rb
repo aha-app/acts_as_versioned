@@ -1,5 +1,5 @@
 # Copyright (c) 2005 Rick Olson
-# 
+#
 # Permission is hereby granted, free of charge, to any person obtaining
 # a copy of this software and associated documentation files (the
 # "Software"), to deal in the Software without restriction, including
@@ -7,10 +7,10 @@
 # distribute, sublicense, and/or sell copies of the Software, and to
 # permit persons to whom the Software is furnished to do so, subject to
 # the following conditions:
-# 
+#
 # The above copyright notice and this permission notice shall be
 # included in all copies or substantial portions of the Software.
-# 
+#
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
 # EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
 # MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
@@ -22,7 +22,7 @@ require 'active_support/concern'
 
 module ActiveRecord #:nodoc:
   module Acts #:nodoc:
-    # Specify this act if you want to save a copy of the row in a versioned table.  This assumes there is a 
+    # Specify this act if you want to save a copy of the row in a versioned table.  This assumes there is a
     # versioned table ready and that your model has a version field.  This works with optimistic locking if the lock_version
     # column is present as well.
     #
@@ -56,7 +56,7 @@ module ActiveRecord #:nodoc:
     #
     # Simple Queries to page between versions
     #
-    #   page.versions.before(version) 
+    #   page.versions.before(version)
     #   page.versions.after(version)
     #
     # Access the previous/next versions from the versioned model itself
@@ -68,7 +68,9 @@ module ActiveRecord #:nodoc:
     # See ActiveRecord::Acts::Versioned::ClassMethods#acts_as_versioned for configuration options
     module Versioned
       VERSION   = "0.6.0"
-      CALLBACKS = [:set_new_version, :save_version, :save_version?]
+
+      # Thread-local key holding the classes that without_revision/without_locking have turned versioning or locking off for
+      DISABLED_KEY = :acts_as_versioned_disabled
 
       # == Configuration options
       #
@@ -269,8 +271,10 @@ module ActiveRecord #:nodoc:
           after_save :clear_old_versions
         end
 
-        # Saves a version of the model in the versioned table.  This is called in the after_save callback by default
+        # Saves a version of the model in the versioned table. This is called in the after_save callback by default.
         def save_version
+          return if self.class.revision_disabled?
+
           if @saving_version
             @saving_version = nil
             rev = self.class.versioned_class.new
@@ -362,7 +366,7 @@ module ActiveRecord #:nodoc:
             define_method(new_model, col.name.to_sym)
 
             # If the field is an enum, use read_attribute_before_type_cast to
-            # get the value that would be in the database, not the friendly 
+            # get the value that would be in the database, not the friendly
             # name (i.e. 50 vs "narrow")
             value = if orig_model.defined_enums&.include? col.name
               orig_model.read_attribute_before_type_cast(col.name)
@@ -381,15 +385,17 @@ module ActiveRecord #:nodoc:
             new_model.send("#{sym}=", orig_model[orig_model.class.inheritance_column]) if orig_model[orig_model.class.inheritance_column]
           end
         end
-          
+
         def define_method(object, method)
           return if object.methods.include? method
           metaclass = class << object; self; end
           metaclass.send :attr_accessor, method
         end
 
-        # Checks whether a new version shall be saved or not.  Calls <tt>version_condition_met?</tt> and <tt>changed?</tt>.
+        # Checks whether a new version shall be saved or not. Calls <tt>version_condition_met?</tt> and <tt>changed?</tt>.
         def save_version?
+          return if self.class.revision_disabled?
+
           version_condition_met? && altered?
         end
 
@@ -426,14 +432,14 @@ module ActiveRecord #:nodoc:
           self.class.without_locking(&block)
         end
 
-        def empty_callback()
-        end
-
         #:nodoc:
 
         protected
-        # sets the new version before saving, unless you're using optimistic locking.  In that case, let it take care of the version.
+
+        # sets the new version before saving, unless you're using optimistic locking. In that case, let it take care of the version.
         def set_new_version
+          return if self.class.revision_disabled?
+
           @saving_version = new_record? || save_version?
           self.send("#{self.class.version_column}=", next_version) if new_record? || (!locking_enabled? && save_version?)
         end
@@ -501,21 +507,12 @@ module ActiveRecord #:nodoc:
           #   Foo.without_revision do
           #     @foo.save
           #   end
-          #
           def without_revision(&block)
-            class_eval do
-              CALLBACKS.each do |attr_name|
-                alias_method "orig_#{attr_name}".to_sym, attr_name
-                alias_method attr_name, :empty_callback
-              end
-            end
-            block.call
-          ensure
-            class_eval do
-              CALLBACKS.each do |attr_name|
-                alias_method attr_name, "orig_#{attr_name}".to_sym
-              end
-            end
+            with_disabled(:revision, &block)
+          end
+
+          def revision_disabled?
+            disabled?(:revision)
           end
 
           # Turns off optimistic locking for the duration of the block
@@ -523,15 +520,36 @@ module ActiveRecord #:nodoc:
           #   Foo.without_locking do
           #     @foo.save
           #   end
-          #
           def without_locking(&block)
-            current = ActiveRecord::Base.lock_optimistically
-            ActiveRecord::Base.lock_optimistically = false if current
-            begin
-              block.call
-            ensure
-              ActiveRecord::Base.lock_optimistically = true if current
-            end
+            with_disabled(:locking, &block)
+          end
+
+          # Overrides ActiveRecord::Locking::Optimistic::ClassMethods#locking_enabled? which every optimistic locking
+          # check goes through. Returning false here turns locking off for this model on the current thread, without
+          # touching ActiveRecord::Base.lock_optimistically.
+          def locking_enabled?
+            super && !disabled?(:locking)
+          end
+
+          private
+
+          def with_disabled(kind)
+            key = [self, kind]
+            disabled = (Thread.current[DISABLED_KEY] ||= {})
+            previous = disabled[key]
+            disabled[key] = true
+
+            yield
+          ensure
+            # Don't simply delete the key in case of nested blocks
+            previous ? disabled[key] = previous : disabled.delete(key)
+          end
+
+          def disabled?(kind)
+            disabled = Thread.current[DISABLED_KEY]
+
+            # Disabling a class also disables its subclasses, check those too
+            disabled.present? && ancestors.any? { |ancestor| disabled[[ancestor, kind]] }
           end
         end
       end
